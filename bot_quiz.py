@@ -11,7 +11,7 @@ print(">>> BOT QUIZ POKER — VERSION MODAL + QUESTION & CHOIX DANS LA FENÊTRE 
 # CONFIG
 # =====================================================================
 
-GUILD_ID = int(os.getenv("GUILD_ID", "1309118091766009856"))
+GUILD_ID = int(os.getenv("GUILD_ID", "1069968737580613752"))
 SCORES_FILE = "scores.json"
 
 intents = discord.Intents.default()
@@ -591,3 +591,4 @@ if not TOKEN:
     print("❌ BOT_TOKEN manquant dans Railway")
 else:
     bot.run(TOKEN)
+
