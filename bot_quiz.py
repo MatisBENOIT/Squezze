@@ -5,7 +5,7 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
 
-print(">>> BOT QUIZ POKER — VERSION MODAL (RAILWAY READY) <<<")
+print(">>> BOT QUIZ POKER — VERSION MODAL + QUESTION & CHOIX DANS LA FENÊTRE <<<")
 
 # =====================================================================
 # CONFIG
@@ -21,29 +21,14 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Quiz en mémoire
-# quizzes[quiz_id] = {
-#   "question": str,
-#   "options": list[(letter, text)],
-#   "correct": list[str],
-#   "points": int,
-#   "answers": dict[user_id(int) -> list[str]],
-#   "rankups": dict[user_id(str) -> new_rank(str)],
-#   "author_id": int
-# }
+# STOCKAGE DES QUIZZ
 quizzes = {}
 
-# Scores persistants
-# scores = {
-#   "all_time": { user_id(str): {"points": float, "questions": int} },
-#   "monthly":  { ... },
-#   "last_month": int
-# }
+# SCORES PERSISTANTS
 scores = {}
 
-
 # =====================================================================
-# RANK SYSTEM
+# RANKS
 # =====================================================================
 
 RANKS = [
@@ -80,21 +65,20 @@ RANK_COLORS = {
 
 
 def get_rank(points: float) -> str:
-    for thr, rank in RANKS:
+    for thr, r in RANKS:
         if points >= thr:
-            return rank
+            return r
     return "ABI 0€"
 
 
 def get_next_rank_info(points: float):
-    for thr, rank in reversed(RANKS):
+    for thr, r in reversed(RANKS):
         if points < thr:
-            return thr, rank, thr - points
+            return thr, r, thr - points
     return None, None, None
 
-
 # =====================================================================
-# SCORES SAVE / LOAD
+# LOAD / SAVE
 # =====================================================================
 
 def save_scores():
@@ -109,7 +93,7 @@ def load_scores():
         try:
             with open(SCORES_FILE, "r", encoding="utf-8") as f:
                 scores = json.load(f)
-        except Exception:
+        except:
             scores = {}
     else:
         scores = {}
@@ -124,49 +108,45 @@ def load_scores():
         scores["last_month"] = now
         save_scores()
 
-
 load_scores()
-print(">>> SCORES CHARGÉS :", scores.keys())
-
 
 # =====================================================================
-# CARD COMBOS → EMOJI
+# COMBOS → EMOJI
 # =====================================================================
 
 suit_map = {"h": "♥️", "s": "♠️", "d": "♦️", "c": "♣️"}
 
 
-def convert_combo_to_emojis(text: str) -> str:
+def convert_combo_to_emojis(text):
     t = text.strip()
     if len(t) % 2 != 0:
         return text
 
-    res = ""
+    r = ""
     for i in range(0, len(t), 2):
         rank = t[i].upper()
-        suit = t[i + 1].lower()
+        suit = t[i+1].lower()
         if rank not in "AKQJT98765432" or suit not in suit_map:
             return text
-        res += f"{rank}{suit_map[suit]} "
-    return res.strip()
-
+        r += f"{rank}{suit_map[suit]} "
+    return r.strip()
 
 # =====================================================================
 # ROLE SYSTEM
 # =====================================================================
 
-async def update_user_rank_role(member: discord.Member, old_rank: str, new_rank: str):
+async def update_user_rank_role(member, old_rank, new_rank):
     guild = member.guild
 
-    def find(name: str):
+    def find(name):
         return discord.utils.get(guild.roles, name=name)
 
     new_role = find(new_rank)
     if new_role is None:
         new_role = await guild.create_role(
             name=new_rank,
-            colour=discord.Colour(RANK_COLORS[new_rank]),
-            mentionable=True,
+            colour=discord.Color(RANK_COLORS[new_rank]),
+            mentionable=True
         )
 
     if old_rank:
@@ -174,81 +154,65 @@ async def update_user_rank_role(member: discord.Member, old_rank: str, new_rank:
         if old_role:
             try:
                 await member.remove_roles(old_role)
-            except Exception:
+            except:
                 pass
 
     try:
         await member.add_roles(new_role)
-    except Exception:
+    except:
         pass
-
 
 # =====================================================================
 # MODAL DE RÉPONSE
 # =====================================================================
 
 class AnswerModal(discord.ui.Modal):
-    def __init__(self, quiz_id: str, question: str, options: list[tuple], valid_letters: list[str]):
+    def __init__(self, quiz_id, question, options, valid_letters):
         super().__init__(title=f"Réponse au quiz {quiz_id}")
         self.quiz_id = quiz_id
         self.valid_letters = valid_letters
 
-        # Construire la liste A — Texte
-        choices_text = "\n".join([f"{l} — {t}" for l, t in options])
+        txt_options = "\n".join([f"{l} — {t}" for l, t in options])
 
         self.info = discord.ui.TextInput(
-            label="Question & Choix (lecture seule)",
+            label="Question & choix (lecture seule)",
             style=discord.TextStyle.paragraph,
-            default=f"{question}\n\nCHOIX :\n{choices_text}",
+            default=f"{question}\n\nCHOIX :\n{txt_options}",
             required=False
         )
-        self.info.disabled = True  # IMPORTANT : non modifiable
+        self.info.disabled = True
         self.add_item(self.info)
 
         self.reponses = discord.ui.TextInput(
             label="Tes réponses (ex : A,C,D ou A C D ou ACD)",
             style=discord.TextStyle.short,
             required=True,
-            max_length=50,
+            max_length=50
         )
         self.add_item(self.reponses)
 
-    def parse_answers(self, raw: str) -> list[str]:
+    def parse_answers(self, raw):
         s = raw.upper()
-        letters_set = set()
+        result = set()
         for ch in s:
             if ch in self.valid_letters:
-                letters_set.add(ch)
-        return sorted(letters_set)
+                result.add(ch)
+        return sorted(result)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction):
         quiz = quizzes.get(self.quiz_id)
         if not quiz:
-            await interaction.response.send_message(
-                "❌ Ce quiz n'existe plus.",
-                ephemeral=True,
-            )
-            return
+            return await interaction.response.send_message("❌ Quiz terminé.", ephemeral=True)
 
-        user = interaction.user
-        uid_str = str(user.id)
-
-        if user.id in quiz["answers"]:
-            await interaction.response.send_message(
-                "❌ Tu as déjà répondu à ce quiz.",
-                ephemeral=True,
-            )
-            return
+        uid = str(interaction.user.id)
+        if interaction.user.id in quiz["answers"]:
+            return await interaction.response.send_message("❌ Tu as déjà répondu.", ephemeral=True)
 
         selected = self.parse_answers(self.reponses.value)
         if not selected:
-            await interaction.response.send_message(
-                "❌ Aucune réponse valide détectée. Utilise A,C,D.",
-                ephemeral=True,
-            )
-            return
+            return await interaction.response.send_message("❌ Réponse invalide.", ephemeral=True)
 
-        quiz["answers"][user.id] = selected
+        quiz["answers"][interaction.user.id] = selected
 
         correct = quiz["correct"]
         pts = quiz["points"]
@@ -257,77 +221,78 @@ class AnswerModal(discord.ui.Modal):
         mauvaises = sum(1 for r in selected if r not in correct)
         gained = (bonnes * pts) - (mauvaises * 0.5)
 
-        old_points = scores["all_time"].get(uid_str, {"points": 0})["points"]
+        old_points = scores["all_time"].get(uid, {"points": 0})["points"]
         old_rank = get_rank(old_points)
 
-        scores["all_time"].setdefault(uid_str, {"points": 0.0, "questions": 0})
-        scores["all_time"][uid_str]["points"] += gained
-        scores["all_time"][uid_str]["questions"] += 1
+        scores["all_time"].setdefault(uid, {"points": 0.0, "questions": 0})
+        scores["all_time"][uid]["points"] += gained
+        scores["all_time"][uid]["questions"] += 1
 
-        scores["monthly"].setdefault(uid_str, {"points": 0.0, "questions": 0})
-        scores["monthly"][uid_str]["points"] += gained
-        scores["monthly"][uid_str]["questions"] += 1
+        scores["monthly"].setdefault(uid, {"points": 0.0, "questions": 0})
+        scores["monthly"][uid]["points"] += gained
+        scores["monthly"][uid]["questions"] += 1
 
         save_scores()
 
-        new_points = scores["all_time"][uid_str]["points"]
+        new_points = scores["all_time"][uid]["points"]
         new_rank = get_rank(new_points)
+
         if new_rank != old_rank:
-            quiz["rankups"][uid_str] = new_rank
+            quiz["rankups"][uid] = new_rank
+
+        print(f"[VOTE] {interaction.user} → {selected} | +{gained}")
 
         await interaction.response.send_message(
             f"✅ Réponse enregistrée : {', '.join(selected)}",
-            ephemeral=True,
+            ephemeral=True
         )
 
 # =====================================================================
-# BOUTON "RÉPONDRE"
+# BOUTON RÉPONDRE
 # =====================================================================
 
-async def callback(self, interaction: discord.Interaction):
-    quiz = quizzes.get(self.quiz_id)
-    if not quiz:
-        await interaction.response.send_message("❌ Ce quiz n'existe plus.", ephemeral=True)
-        return
+class AnswerButton(discord.ui.Button):
+    def __init__(self, quiz_id):
+        super().__init__(
+            label="Répondre",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"answer_{quiz_id}"
+        )
+        self.quiz_id = quiz_id
 
-    q = quiz["question"]
-    opts = quiz["options"]
-    valid_letters = [l for l, _ in opts]
+    async def callback(self, interaction):
+        quiz = quizzes.get(self.quiz_id)
+        if not quiz:
+            return await interaction.response.send_message("❌ Quiz expiré.", ephemeral=True)
 
-    modal = AnswerModal(self.quiz_id, q, opts, valid_letters)
-    await interaction.response.send_modal(modal)
+        q = quiz["question"]
+        opts = quiz["options"]
+        valid = [l for l, _ in opts]
+
+        modal = AnswerModal(self.quiz_id, q, opts, valid)
+        await interaction.response.send_modal(modal)
 
 class QuizView(discord.ui.View):
-    def __init__(self, quiz_id: str):
+    def __init__(self, quiz_id):
         super().__init__(timeout=None)
         self.add_item(AnswerButton(quiz_id))
 
 # =====================================================================
-# COMMANDES
+# /QUIZ2
 # =====================================================================
 
-@bot.tree.command(name="quiz2", description="Créer un quiz multi-choix (avec modal)")
+@bot.tree.command(name="quiz2", description="Créer un quiz multi-choix (modal)")
 @app_commands.describe(
-    quiz_id="ID du quiz (ex: probe1)",
+    quiz_id="ID unique du quiz",
     question="La question",
     choix="Choix séparés par |",
-    bonne_reponse="Bonne(s) lettre(s) ex: A,C",
-    points="Points par bonne réponse",
+    bonne_reponse="Lettres correctes (ex : A,C)",
+    points="Points par bonne réponse"
 )
-async def quiz2(
-    interaction: discord.Interaction,
-    quiz_id: str,
-    question: str,
-    choix: str,
-    bonne_reponse: str,
-    points: int,
-):
+async def quiz2(interaction, quiz_id: str, question: str, choix: str, bonne_reponse: str, points: int):
+
     if quiz_id in quizzes:
-        await interaction.response.send_message(
-            "❌ Cet ID de quiz existe déjà.",
-            ephemeral=True,
-        )
-        return
+        return await interaction.response.send_message("❌ Cet ID existe déjà.", ephemeral=True)
 
     raw = [convert_combo_to_emojis(c.strip()) for c in choix.split("|")]
     letters = [chr(ord("A") + i) for i in range(len(raw))]
@@ -341,13 +306,13 @@ async def quiz2(
         "points": points,
         "answers": {},
         "rankups": {},
-        "author_id": interaction.user.id,
+        "author_id": interaction.user.id
     }
 
     embed = discord.Embed(
         title=f"🧠 Quiz `{quiz_id}`",
-        description=f"{question}\n\n**{points} pt / bonne, -0.5 / mauvaise**",
-        color=0x00B0F4,
+        description=f"{question}\n\n**{points} pt / bonne réponse, -0.5 / mauvaise**",
+        color=0x00B0F4
     )
     for l, t in options:
         embed.add_field(name=l, value=t, inline=False)
@@ -357,21 +322,17 @@ async def quiz2(
 
     await interaction.response.send_message(embed=embed, view=view)
 
-
 # =====================================================================
-# REVEAL
+# /REVEAL
 # =====================================================================
 
 @bot.tree.command(name="reveal", description="Révèle un quiz")
 @app_commands.describe(quiz_id="ID du quiz à révéler")
-async def reveal(interaction: discord.Interaction, quiz_id: str):
+async def reveal(interaction, quiz_id: str):
+
     quiz = quizzes.get(quiz_id)
     if not quiz:
-        await interaction.response.send_message(
-            "❌ Aucun quiz avec cet ID.",
-            ephemeral=True,
-        )
-        return
+        return await interaction.response.send_message("❌ ID invalide.", ephemeral=True)
 
     q = quiz["question"]
     options = quiz["options"]
@@ -379,14 +340,13 @@ async def reveal(interaction: discord.Interaction, quiz_id: str):
     answers = quiz["answers"]
     p = quiz["points"]
 
-    # Comptage des votes par option
     counts = {l: 0 for l, _ in options}
     for rep in answers.values():
         for r in rep:
             if r in counts:
                 counts[r] += 1
 
-    opt_text = "\n".join(
+    opt_lines = "\n".join(
         f"{'✅' if l in correct else '❌'} **{l}** — {t} ({counts[l]} votes)"
         for l, t in options
     )
@@ -400,7 +360,7 @@ async def reveal(interaction: discord.Interaction, quiz_id: str):
         pts_lines.append(f"**{user.name}** : {gained:.1f} pts")
     pts_text = "\n".join(pts_lines) or "Personne."
 
-    rank_lines = []
+    rank_text = []
     for uid_str, new_rank in quiz["rankups"].items():
         user = await bot.fetch_user(int(uid_str))
         member = interaction.guild.get_member(int(uid_str))
@@ -408,38 +368,61 @@ async def reveal(interaction: discord.Interaction, quiz_id: str):
         old_rank = get_rank(old_pts - 0.0001)
         if member:
             await update_user_rank_role(member, old_rank, new_rank)
-        rank_lines.append(f"🔥 {user.name} → {new_rank}")
-    rank_text = "\n".join(rank_lines) or "Aucun."
+        rank_text.append(f"🔥 {user.name} → {new_rank}")
+    rank_text = "\n".join(rank_text) or "Aucun."
 
     await interaction.response.send_message(
         f"### 🧠 Quiz `{quiz_id}`\n"
         f"❓ {q}\n\n"
-        f"🃏 Bonnes réponses : {', '.join(correct)}\n"
-        f"{opt_text}\n\n"
+        f"{opt_lines}\n\n"
         f"### 🏅 Points :\n{pts_text}\n\n"
         f"### 🎖 Rank-ups :\n{rank_text}"
     )
 
-    # Une fois révélé, on peut supprimer le quiz
     del quizzes[quiz_id]
 
+# =====================================================================
+# /VOTES (privé)
+# =====================================================================
+
+@bot.tree.command(name="votes", description="Voir qui a répondu (auteur uniquement)")
+@app_commands.describe(quiz_id="ID du quiz")
+async def votes(interaction, quiz_id: str):
+
+    quiz = quizzes.get(quiz_id)
+    if not quiz:
+        return await interaction.response.send_message("❌ Quiz introuvable.", ephemeral=True)
+
+    if quiz["author_id"] != interaction.user.id:
+        return await interaction.response.send_message("❌ Tu n'es pas l'auteur.", ephemeral=True)
+
+    answers = quiz["answers"]
+    if not answers:
+        return await interaction.response.send_message("Personne n'a répondu.", ephemeral=True)
+
+    lines = []
+    for uid_int, rep in answers.items():
+        user = await bot.fetch_user(uid_int)
+        lines.append(f"**{user.name}** : {', '.join(rep)}")
+
+    await interaction.response.send_message(
+        "👀 **Votes enregistrés :**\n" + "\n".join(lines),
+        ephemeral=True
+    )
 
 # =====================================================================
-# REVEAL ALL
+# /REVEAL_ALL
 # =====================================================================
 
 @bot.tree.command(name="reveal_all", description="Révèle tous les quiz actifs")
-async def reveal_all(interaction: discord.Interaction):
+async def reveal_all(interaction):
+
     if not quizzes:
-        await interaction.response.send_message(
-            "❌ Aucun quiz actif.",
-            ephemeral=True,
-        )
-        return
+        return await interaction.response.send_message("❌ Aucun quiz actif.", ephemeral=True)
 
     blocks = []
 
-    for quiz_id, quiz in list(quizzes.items()):
+    for qid, quiz in list(quizzes.items()):
         q = quiz["question"]
         options = quiz["options"]
         correct = quiz["correct"]
@@ -452,102 +435,69 @@ async def reveal_all(interaction: discord.Interaction):
                 if r in counts:
                     counts[r] += 1
 
-        opt_text = "\n".join(
+        opt_txt = "\n".join(
             f"{'✅' if l in correct else '❌'} **{l}** — {t} ({counts[l]} votes)"
             for l, t in options
         )
 
-        pts_lines = []
+        pts_txt = ""
         for uid_int, rep in answers.items():
             bonnes = sum(1 for r in rep if r in correct)
             mauvaises = sum(1 for r in rep if r not in correct)
             gained = (bonnes * p) - (mauvaises * 0.5)
             user = await bot.fetch_user(uid_int)
-            pts_lines.append(f"{user.name} : {gained:.1f} pts")
-        pts_text = "\n".join(pts_lines) or "Personne."
-
-        ru_lines = []
-        for uid_str, new_rank in quiz["rankups"].items():
-            user = await bot.fetch_user(int(uid_str))
-            member = interaction.guild.get_member(int(uid_str))
-            old_pts = scores["all_time"][uid_str]["points"]
-            old_rank = get_rank(old_pts - 0.0001)
-            if member:
-                await update_user_rank_role(member, old_rank, new_rank)
-            ru_lines.append(f"{user.name} → {new_rank}")
-        rank_text = "\n".join(ru_lines) or "Aucun."
+            pts_txt += f"{user.name} : {gained:.1f} pts\n"
 
         blocks.append(
-            f"## 🔹 Quiz `{quiz_id}`\n"
+            f"## 🔹 Quiz `{qid}`\n"
             f"❓ {q}\n"
-            f"🃏 Bonnes réponses : {', '.join(correct)}\n"
-            f"{opt_text}\n\n"
-            f"### 🏅 Points :\n{pts_text}\n\n"
-            f"### 🎖 Rank-ups :\n{rank_text}\n---"
+            f"{opt_txt}\n\n"
+            f"🏅 Points :\n{pts_txt or 'Personne.'}\n---"
         )
 
-        del quizzes[quiz_id]
+        del quizzes[qid]
 
-    await interaction.response.send_message("\n\n".join(blocks))
-
-
-# =====================================================================
-# VOTES (privé auteur)
-# =====================================================================
-
-@bot.tree.command(name="votes", description="Voir les votes d’un quiz (auteur uniquement)")
-@app_commands.describe(quiz_id="ID du quiz")
-async def votes(interaction: discord.Interaction, quiz_id: str):
-    quiz = quizzes.get(quiz_id)
-    if not quiz:
-        await interaction.response.send_message(
-            "❌ Aucun quiz avec cet ID.",
-            ephemeral=True,
-        )
-        return
-
-    if quiz["author_id"] != interaction.user.id:
-        await interaction.response.send_message(
-            "❌ Tu n'es pas l'auteur de ce quiz.",
-            ephemeral=True,
-        )
-        return
-
-    answers = quiz["answers"]
-    if not answers:
-        await interaction.response.send_message(
-            "Personne n'a encore répondu.",
-            ephemeral=True,
-        )
-        return
-
-    lines = []
-    for uid_int, rep in answers.items():
-        user = await bot.fetch_user(uid_int)
-        lines.append(f"**{user.name}** : {', '.join(rep)}")
-
-    await interaction.response.send_message(
-        "👀 **Votes enregistrés :**\n\n" + "\n".join(lines),
-        ephemeral=True,
-    )
-
+    await interaction.response.send_message("\n".join(blocks))
 
 # =====================================================================
-# LEADERBOARD
+# /MYRANK
 # =====================================================================
 
-@bot.tree.command(name="leaderboard", description="Classement all-time + mensuel")
-async def leaderboard(interaction: discord.Interaction):
+@bot.tree.command(name="myrank", description="Voir ton rang")
+async def myrank(interaction):
+    uid = str(interaction.user.id)
+
+    if uid not in scores["all_time"]:
+        return await interaction.response.send_message("Tu n'as pas encore de score.", ephemeral=True)
+
+    data = scores["all_time"][uid]
+    pts = data["points"]
+    rank = get_rank(pts)
+    nxt_thr, nxt_rank, diff = get_next_rank_info(pts)
+
+    emb = discord.Embed(title=f"🎖 {interaction.user.name}", color=0xFFD700)
+    emb.add_field(name="Rang", value=rank, inline=False)
+    emb.add_field(name="Points", value=f"{pts:.1f}")
+    emb.add_field(name="Questions", value=data["questions"])
+
+    if nxt_rank:
+        emb.add_field(name="Prochain rang", value=nxt_rank, inline=False)
+        emb.add_field(name="Manque", value=f"{diff:.1f} pts")
+
+    await interaction.response.send_message(embed=emb)
+
+# =====================================================================
+# /LEADERBOARD
+# =====================================================================
+
+@bot.tree.command(name="leaderboard", description="Classement complet")
+async def leaderboard(interaction):
+
     if not scores["all_time"]:
-        await interaction.response.send_message(
-            "Aucun score enregistré.",
-            ephemeral=True,
-        )
-        return
+        return await interaction.response.send_message("Aucun score.", ephemeral=True)
 
     emb = discord.Embed(title="🏆 Leaderboard Poker", color=0xFFD700)
 
-    # All-time
     ordered_all = sorted(scores["all_time"].items(), key=lambda x: x[1]["points"], reverse=True)
     txt_all = ""
     for i, (uid_str, data) in enumerate(ordered_all, 1):
@@ -556,7 +506,6 @@ async def leaderboard(interaction: discord.Interaction):
         txt_all += f"**{i}. {user.name}** — {data['points']:.1f} pts | {r}\n"
     emb.add_field(name="🔥 ALL-TIME", value=txt_all or "Personne.", inline=False)
 
-    # Monthly
     ordered_m = sorted(scores["monthly"].items(), key=lambda x: x[1]["points"], reverse=True)
     txt_m = ""
     for i, (uid_str, data) in enumerate(ordered_m, 1):
@@ -567,106 +516,60 @@ async def leaderboard(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=emb)
 
-
 # =====================================================================
-# MYRANK
-# =====================================================================
-
-@bot.tree.command(name="myrank", description="Voir ton rang")
-async def myrank(interaction: discord.Interaction):
-    uid_str = str(interaction.user.id)
-
-    if uid_str not in scores["all_time"]:
-        await interaction.response.send_message(
-            "Tu n'as pas encore de score.",
-            ephemeral=True,
-        )
-        return
-
-    data = scores["all_time"][uid_str]
-    pts = data["points"]
-    rank = get_rank(pts)
-    nxt_thr, nxt_rank, diff = get_next_rank_info(pts)
-
-    emb = discord.Embed(title=f"🎖 {interaction.user.name}", color=0xFFD700)
-    emb.add_field(name="Rang", value=rank, inline=False)
-    emb.add_field(name="Points", value=f"{pts:.1f}", inline=True)
-    emb.add_field(name="Questions", value=data["questions"], inline=True)
-
-    if nxt_rank:
-        emb.add_field(name="Prochain rang", value=nxt_rank, inline=False)
-        emb.add_field(name="Manque", value=f"{diff:.1f} pts", inline=True)
-
-    await interaction.response.send_message(embed=emb)
-
-
-# =====================================================================
-# RESET SCORES
+# /RESET_SCORES
 # =====================================================================
 
-@bot.tree.command(name="reset_scores", description="Reset tous les scores (admin)")
-async def reset_scores(interaction: discord.Interaction):
+@bot.tree.command(name="reset_scores", description="Reset scores (admin)")
+async def reset_scores(interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(
-            "❌ Réservé aux admins.",
-            ephemeral=True,
-        )
-        return
+        return await interaction.response.send_message("Admin only.", ephemeral=True)
 
     scores["all_time"] = {}
     scores["monthly"] = {}
     save_scores()
 
-    await interaction.response.send_message("✅ Scores réinitialisés.")
-
+    await interaction.response.send_message("Scores reset.")
 
 # =====================================================================
-# SYNC_ROLES
+# /SYNC_ROLES
 # =====================================================================
 
 @bot.tree.command(name="sync_roles", description="Créer les rôles ABI (admin)")
-async def sync_roles(interaction: discord.Interaction):
+async def sync_roles(interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(
-            "❌ Réservé aux admins.",
-            ephemeral=True,
-        )
-        return
+        return await interaction.response.send_message("Admin only.", ephemeral=True)
 
     guild = interaction.guild
     created = []
 
-    for rank_name, color in RANK_COLORS.items():
-        if not discord.utils.get(guild.roles, name=rank_name):
+    for rank, color in RANK_COLORS.items():
+        if not discord.utils.get(guild.roles, name=rank):
             await guild.create_role(
-                name=rank_name,
-                colour=discord.Colour(color),
-                mentionable=True,
+                name=rank,
+                colour=discord.Color(color),
+                mentionable=True
             )
-            created.append(rank_name)
+            created.append(rank)
 
     if created:
-        await interaction.response.send_message(
-            "Rôles créés :\n" + "\n".join(created)
-        )
+        await interaction.response.send_message("Rôles créés :\n" + "\n".join(created))
     else:
         await interaction.response.send_message("Tous les rôles existent déjà.")
 
-
 # =====================================================================
-# FORCE_SYNC (debug)
+# /force_sync
 # =====================================================================
 
-@bot.tree.command(name="force_sync", description="Forcer la sync des commandes (debug)")
-async def force_sync(interaction: discord.Interaction):
+@bot.tree.command(name="force_sync", description="Forcer la sync (debug)")
+async def force_sync(interaction):
     guild = discord.Object(id=GUILD_ID)
     cmds = await bot.tree.sync(guild=guild)
     names = [c.name for c in cmds]
     await interaction.response.send_message(
-        f"🔄 Commandes synchronisées : {names}",
-        ephemeral=True,
+        f"Commandes synchronisées : {names}",
+        ephemeral=True
     )
-
 
 # =====================================================================
 # ON_READY
@@ -674,19 +577,17 @@ async def force_sync(interaction: discord.Interaction):
 
 @bot.event
 async def on_ready():
-    print(f"Bot connecté : {bot.user}")
+    print(f"Bot connecté en tant que {bot.user}")
     guild = discord.Object(id=GUILD_ID)
     cmds = await bot.tree.sync(guild=guild)
-    print("Commandes SYNC :", [c.name for c in cmds])
-
+    print("Commandes sync :", [c.name for c in cmds])
 
 # =====================================================================
-# RUN
+# RUN BOT
 # =====================================================================
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    print("❌ ERREUR : BOT_TOKEN manquant dans Railway")
+    print("❌ BOT_TOKEN manquant dans Railway")
 else:
     bot.run(TOKEN)
-
