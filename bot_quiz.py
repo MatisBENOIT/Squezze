@@ -188,12 +188,23 @@ async def update_user_rank_role(member: discord.Member, old_rank: str, new_rank:
 # =====================================================================
 
 class AnswerModal(discord.ui.Modal):
-    def __init__(self, quiz_id: str, valid_letters: list[str]):
+    def __init__(self, quiz_id: str, question: str, options: list[tuple], valid_letters: list[str]):
         super().__init__(title=f"Réponse au quiz {quiz_id}")
         self.quiz_id = quiz_id
         self.valid_letters = valid_letters
 
-        # Un seul champ texte : l'utilisateur peut mettre "A C D", "a,c,d", "ACD", etc.
+        # Construire la liste A — Texte
+        choices_text = "\n".join([f"{l} — {t}" for l, t in options])
+
+        self.info = discord.ui.TextInput(
+            label="Question & Choix (lecture seule)",
+            style=discord.TextStyle.paragraph,
+            default=f"{question}\n\nCHOIX :\n{choices_text}",
+            required=False
+        )
+        self.info.disabled = True  # IMPORTANT : non modifiable
+        self.add_item(self.info)
+
         self.reponses = discord.ui.TextInput(
             label="Tes réponses (ex : A,C,D ou A C D ou ACD)",
             style=discord.TextStyle.short,
@@ -203,11 +214,6 @@ class AnswerModal(discord.ui.Modal):
         self.add_item(self.reponses)
 
     def parse_answers(self, raw: str) -> list[str]:
-        """
-        Format B choisi :
-        - accepte : "A,C,D" / "a c d" / "ACD" / "a,c d"
-        - on récupère juste les lettres dans valid_letters
-        """
         s = raw.upper()
         letters_set = set()
         for ch in s:
@@ -227,7 +233,6 @@ class AnswerModal(discord.ui.Modal):
         user = interaction.user
         uid_str = str(user.id)
 
-        # Interdire de répondre deux fois
         if user.id in quiz["answers"]:
             await interaction.response.send_message(
                 "❌ Tu as déjà répondu à ce quiz.",
@@ -238,7 +243,7 @@ class AnswerModal(discord.ui.Modal):
         selected = self.parse_answers(self.reponses.value)
         if not selected:
             await interaction.response.send_message(
-                "❌ Aucune réponse valide détectée. Utilise par exemple A,C,D.",
+                "❌ Aucune réponse valide détectée. Utilise A,C,D.",
                 ephemeral=True,
             )
             return
@@ -246,11 +251,11 @@ class AnswerModal(discord.ui.Modal):
         quiz["answers"][user.id] = selected
 
         correct = quiz["correct"]
-        points_value = quiz["points"]
+        pts = quiz["points"]
 
         bonnes = sum(1 for r in selected if r in correct)
         mauvaises = sum(1 for r in selected if r not in correct)
-        gained = (bonnes * points_value) - (mauvaises * 0.5)
+        gained = (bonnes * pts) - (mauvaises * 0.5)
 
         old_points = scores["all_time"].get(uid_str, {"points": 0})["points"]
         old_rank = get_rank(old_points)
@@ -267,55 +272,35 @@ class AnswerModal(discord.ui.Modal):
 
         new_points = scores["all_time"][uid_str]["points"]
         new_rank = get_rank(new_points)
-
         if new_rank != old_rank:
             quiz["rankups"][uid_str] = new_rank
-
-        print(
-            f"[VOTE-MODAL] {interaction.user} ({interaction.user.id}) "
-            f"Quiz={self.quiz_id} Raw='{self.reponses.value}' Parsed={selected} "
-            f"Gagné={gained} pts (Bonnes={bonnes}, Mauvaises={mauvaises})"
-        )
 
         await interaction.response.send_message(
             f"✅ Réponse enregistrée : {', '.join(selected)}",
             ephemeral=True,
         )
 
-
 # =====================================================================
 # BOUTON "RÉPONDRE"
 # =====================================================================
 
-class AnswerButton(discord.ui.Button):
-    def __init__(self, quiz_id: str):
-        self.quiz_id = quiz_id
-        super().__init__(
-            label="Répondre",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"answer_{quiz_id}",
-        )
+async def callback(self, interaction: discord.Interaction):
+    quiz = quizzes.get(self.quiz_id)
+    if not quiz:
+        await interaction.response.send_message("❌ Ce quiz n'existe plus.", ephemeral=True)
+        return
 
-    async def callback(self, interaction: discord.Interaction):
-        quiz = quizzes.get(self.quiz_id)
-        if not quiz:
-            await interaction.response.send_message(
-                "❌ Ce quiz n'existe plus.",
-                ephemeral=True,
-            )
-            return
+    q = quiz["question"]
+    opts = quiz["options"]
+    valid_letters = [l for l, _ in opts]
 
-        valid_letters = [l for l, _ in quiz["options"]]
-
-        modal = AnswerModal(self.quiz_id, valid_letters)
-        await interaction.response.send_modal(modal)
-
+    modal = AnswerModal(self.quiz_id, q, opts, valid_letters)
+    await interaction.response.send_modal(modal)
 
 class QuizView(discord.ui.View):
     def __init__(self, quiz_id: str):
         super().__init__(timeout=None)
         self.add_item(AnswerButton(quiz_id))
-
 
 # =====================================================================
 # COMMANDES
@@ -704,3 +689,4 @@ if not TOKEN:
     print("❌ ERREUR : BOT_TOKEN manquant dans Railway")
 else:
     bot.run(TOKEN)
+
