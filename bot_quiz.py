@@ -571,4 +571,5 @@ async def on_ready():
     print("Commandes SYNC au serveur :", [c.name for c in synced])
 
 # -------------------- RUN --------------------
-bot.run("MTQzODQ4NTEzNTczNjU3Mzk5NQ.GQGR92.2wHcBStxg1EODhfVKUoB3_SMPuuSQBbvCcnxwc")
+bot.run("BOT_TOKEN")
+
