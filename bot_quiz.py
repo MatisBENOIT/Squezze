@@ -5,7 +5,7 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
 
-print(">>> BOT QUIZ POKER — VERSION BOUTONS ON/OFF (RAILWAY) <<<")
+print(">>> BOT QUIZ POKER — VERSION MODAL (RAILWAY READY) <<<")
 
 # =====================================================================
 # CONFIG
@@ -21,9 +21,24 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Quiz actifs en mémoire
+# Quiz en mémoire
+# quizzes[quiz_id] = {
+#   "question": str,
+#   "options": list[(letter, text)],
+#   "correct": list[str],
+#   "points": int,
+#   "answers": dict[user_id(int) -> list[str]],
+#   "rankups": dict[user_id(str) -> new_rank(str)],
+#   "author_id": int
+# }
 quizzes = {}
-# Scores persos
+
+# Scores persistants
+# scores = {
+#   "all_time": { user_id(str): {"points": float, "questions": int} },
+#   "monthly":  { ... },
+#   "last_month": int
+# }
 scores = {}
 
 
@@ -169,85 +184,65 @@ async def update_user_rank_role(member: discord.Member, old_rank: str, new_rank:
 
 
 # =====================================================================
-# UI : BOUTONS ON/OFF PAR LETTRE
+# MODAL DE RÉPONSE
 # =====================================================================
 
-class OptionButton(discord.ui.Button):
-    def __init__(self, quiz_id: str, letter: str, text: str):
+class AnswerModal(discord.ui.Modal):
+    def __init__(self, quiz_id: str, valid_letters: list[str]):
+        super().__init__(title=f"Réponse au quiz {quiz_id}")
         self.quiz_id = quiz_id
-        self.letter = letter
-        self.text = text
-        super().__init__(
-            label=letter,
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"opt_{quiz_id}_{letter}",
-        )
+        self.valid_letters = valid_letters
 
-    async def callback(self, interaction: discord.Interaction):
+        # Un seul champ texte : l'utilisateur peut mettre "A C D", "a,c,d", "ACD", etc.
+        self.reponses = discord.ui.TextInput(
+            label="Tes réponses (ex : A,C,D ou A C D ou ACD)",
+            style=discord.TextStyle.short,
+            required=True,
+            max_length=50,
+        )
+        self.add_item(self.reponses)
+
+    def parse_answers(self, raw: str) -> list[str]:
+        """
+        Format B choisi :
+        - accepte : "A,C,D" / "a c d" / "ACD" / "a,c d"
+        - on récupère juste les lettres dans valid_letters
+        """
+        s = raw.upper()
+        letters_set = set()
+        for ch in s:
+            if ch in self.valid_letters:
+                letters_set.add(ch)
+        return sorted(letters_set)
+
+    async def on_submit(self, interaction: discord.Interaction):
         quiz = quizzes.get(self.quiz_id)
         if not quiz:
-            return
-
-        user_id = interaction.user.id
-        temp = quiz["answers_temp"].setdefault(user_id, set())
-
-        # Toggle ON/OFF
-        if self.letter in temp:
-            temp.remove(self.letter)
-            state = "OFF"
-        else:
-            temp.add(self.letter)
-            state = "ON"
-
-        print(
-            f"[VOTE-CLICK] {interaction.user} ({interaction.user.id}) "
-            f"Quiz={self.quiz_id} Button={self.letter} State={state}"
-        )
-
-        # On ne répond pas (déjà cliqué, pas besoin de message)
-        await interaction.response.defer(ephemeral=True)
-
-
-class ValidateButton(discord.ui.Button):
-    def __init__(self, quiz_id: str):
-        self.quiz_id = quiz_id
-        super().__init__(
-            label="Valider",
-            style=discord.ButtonStyle.success,
-            custom_id=f"validate_{quiz_id}",
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        # On defère tout de suite → évite tous les "interaction failed"
-        await interaction.response.defer(ephemeral=True)
-        await self.process(interaction)
-
-    async def process(self, interaction: discord.Interaction):
-        quiz = quizzes.get(self.quiz_id)
-        if not quiz:
-            await interaction.followup.send("❌ Ce quiz est terminé.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Ce quiz n'existe plus.",
+                ephemeral=True,
+            )
             return
 
         user = interaction.user
         uid_str = str(user.id)
 
-        temp = quiz["answers_temp"].get(user.id)
-        if not temp:
-            await interaction.followup.send(
-                "❌ Tu dois sélectionner au moins une réponse.",
-                ephemeral=True,
-            )
-            return
-
+        # Interdire de répondre deux fois
         if user.id in quiz["answers"]:
-            await interaction.followup.send(
-                "❌ Tu as déjà validé ta réponse.",
+            await interaction.response.send_message(
+                "❌ Tu as déjà répondu à ce quiz.",
                 ephemeral=True,
             )
             return
 
-        # Liste triée des lettres sélectionnées
-        selected = sorted(temp)
+        selected = self.parse_answers(self.reponses.value)
+        if not selected:
+            await interaction.response.send_message(
+                "❌ Aucune réponse valide détectée. Utilise par exemple A,C,D.",
+                ephemeral=True,
+            )
+            return
+
         quiz["answers"][user.id] = selected
 
         correct = quiz["correct"]
@@ -277,32 +272,56 @@ class ValidateButton(discord.ui.Button):
             quiz["rankups"][uid_str] = new_rank
 
         print(
-            f"[VOTE-VALIDATION] {interaction.user} ({interaction.user.id}) "
-            f"Quiz={self.quiz_id} Selected={selected} "
+            f"[VOTE-MODAL] {interaction.user} ({interaction.user.id}) "
+            f"Quiz={self.quiz_id} Raw='{self.reponses.value}' Parsed={selected} "
             f"Gagné={gained} pts (Bonnes={bonnes}, Mauvaises={mauvaises})"
         )
 
-        await interaction.followup.send(
+        await interaction.response.send_message(
             f"✅ Réponse enregistrée : {', '.join(selected)}",
             ephemeral=True,
         )
 
 
+# =====================================================================
+# BOUTON "RÉPONDRE"
+# =====================================================================
+
+class AnswerButton(discord.ui.Button):
+    def __init__(self, quiz_id: str):
+        self.quiz_id = quiz_id
+        super().__init__(
+            label="Répondre",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"answer_{quiz_id}",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        quiz = quizzes.get(self.quiz_id)
+        if not quiz:
+            await interaction.response.send_message(
+                "❌ Ce quiz n'existe plus.",
+                ephemeral=True,
+            )
+            return
+
+        valid_letters = [l for l, _ in quiz["options"]]
+
+        modal = AnswerModal(self.quiz_id, valid_letters)
+        await interaction.response.send_modal(modal)
+
+
 class QuizView(discord.ui.View):
-    def __init__(self, quiz_id: str, options):
+    def __init__(self, quiz_id: str):
         super().__init__(timeout=None)
-        # boutons A / B / C ...
-        for letter, text in options:
-            self.add_item(OptionButton(quiz_id, letter, text))
-        # bouton Valider
-        self.add_item(ValidateButton(quiz_id))
+        self.add_item(AnswerButton(quiz_id))
 
 
 # =====================================================================
 # COMMANDES
 # =====================================================================
 
-@bot.tree.command(name="quiz2", description="Créer un quiz multi-choix (boutons)")
+@bot.tree.command(name="quiz2", description="Créer un quiz multi-choix (avec modal)")
 @app_commands.describe(
     quiz_id="ID du quiz (ex: probe1)",
     question="La question",
@@ -327,18 +346,16 @@ async def quiz2(
 
     raw = [convert_combo_to_emojis(c.strip()) for c in choix.split("|")]
     letters = [chr(ord("A") + i) for i in range(len(raw))]
-    opts = list(zip(letters, raw))
-
+    options = list(zip(letters, raw))
     correct = [x.strip().upper() for x in bonne_reponse.split(",")]
 
     quizzes[quiz_id] = {
         "question": question,
-        "options": opts,
+        "options": options,
         "correct": correct,
         "points": points,
-        "answers": {},        # user_id (int) -> list[str]
-        "answers_temp": {},   # user_id (int) -> set[str]
-        "rankups": {},        # user_id (str) -> new_rank
+        "answers": {},
+        "rankups": {},
         "author_id": interaction.user.id,
     }
 
@@ -347,10 +364,10 @@ async def quiz2(
         description=f"{question}\n\n**{points} pt / bonne, -0.5 / mauvaise**",
         color=0x00B0F4,
     )
-    for l, t in opts:
+    for l, t in options:
         embed.add_field(name=l, value=t, inline=False)
 
-    view = QuizView(quiz_id, opts)
+    view = QuizView(quiz_id)
     bot.add_view(view)
 
     await interaction.response.send_message(embed=embed, view=view)
@@ -377,6 +394,7 @@ async def reveal(interaction: discord.Interaction, quiz_id: str):
     answers = quiz["answers"]
     p = quiz["points"]
 
+    # Comptage des votes par option
     counts = {l: 0 for l, _ in options}
     for rep in answers.values():
         for r in rep:
@@ -417,14 +435,82 @@ async def reveal(interaction: discord.Interaction, quiz_id: str):
         f"### 🎖 Rank-ups :\n{rank_text}"
     )
 
+    # Une fois révélé, on peut supprimer le quiz
     del quizzes[quiz_id]
 
 
 # =====================================================================
-# VOTES (privé pour l’auteur)
+# REVEAL ALL
 # =====================================================================
 
-@bot.tree.command(name="votes", description="Voir les votes (auteur uniquement)")
+@bot.tree.command(name="reveal_all", description="Révèle tous les quiz actifs")
+async def reveal_all(interaction: discord.Interaction):
+    if not quizzes:
+        await interaction.response.send_message(
+            "❌ Aucun quiz actif.",
+            ephemeral=True,
+        )
+        return
+
+    blocks = []
+
+    for quiz_id, quiz in list(quizzes.items()):
+        q = quiz["question"]
+        options = quiz["options"]
+        correct = quiz["correct"]
+        answers = quiz["answers"]
+        p = quiz["points"]
+
+        counts = {l: 0 for l, _ in options}
+        for rep in answers.values():
+            for r in rep:
+                if r in counts:
+                    counts[r] += 1
+
+        opt_text = "\n".join(
+            f"{'✅' if l in correct else '❌'} **{l}** — {t} ({counts[l]} votes)"
+            for l, t in options
+        )
+
+        pts_lines = []
+        for uid_int, rep in answers.items():
+            bonnes = sum(1 for r in rep if r in correct)
+            mauvaises = sum(1 for r in rep if r not in correct)
+            gained = (bonnes * p) - (mauvaises * 0.5)
+            user = await bot.fetch_user(uid_int)
+            pts_lines.append(f"{user.name} : {gained:.1f} pts")
+        pts_text = "\n".join(pts_lines) or "Personne."
+
+        ru_lines = []
+        for uid_str, new_rank in quiz["rankups"].items():
+            user = await bot.fetch_user(int(uid_str))
+            member = interaction.guild.get_member(int(uid_str))
+            old_pts = scores["all_time"][uid_str]["points"]
+            old_rank = get_rank(old_pts - 0.0001)
+            if member:
+                await update_user_rank_role(member, old_rank, new_rank)
+            ru_lines.append(f"{user.name} → {new_rank}")
+        rank_text = "\n".join(ru_lines) or "Aucun."
+
+        blocks.append(
+            f"## 🔹 Quiz `{quiz_id}`\n"
+            f"❓ {q}\n"
+            f"🃏 Bonnes réponses : {', '.join(correct)}\n"
+            f"{opt_text}\n\n"
+            f"### 🏅 Points :\n{pts_text}\n\n"
+            f"### 🎖 Rank-ups :\n{rank_text}\n---"
+        )
+
+        del quizzes[quiz_id]
+
+    await interaction.response.send_message("\n\n".join(blocks))
+
+
+# =====================================================================
+# VOTES (privé auteur)
+# =====================================================================
+
+@bot.tree.command(name="votes", description="Voir les votes d’un quiz (auteur uniquement)")
 @app_commands.describe(quiz_id="ID du quiz")
 async def votes(interaction: discord.Interaction, quiz_id: str):
     quiz = quizzes.get(quiz_id)
@@ -469,7 +555,7 @@ async def votes(interaction: discord.Interaction, quiz_id: str):
 async def leaderboard(interaction: discord.Interaction):
     if not scores["all_time"]:
         await interaction.response.send_message(
-            "Aucun score pour l'instant.",
+            "Aucun score enregistré.",
             ephemeral=True,
         )
         return
@@ -479,8 +565,8 @@ async def leaderboard(interaction: discord.Interaction):
     # All-time
     ordered_all = sorted(scores["all_time"].items(), key=lambda x: x[1]["points"], reverse=True)
     txt_all = ""
-    for i, (uid, data) in enumerate(ordered_all, 1):
-        user = await bot.fetch_user(int(uid))
+    for i, (uid_str, data) in enumerate(ordered_all, 1):
+        user = await bot.fetch_user(int(uid_str))
         r = get_rank(data["points"])
         txt_all += f"**{i}. {user.name}** — {data['points']:.1f} pts | {r}\n"
     emb.add_field(name="🔥 ALL-TIME", value=txt_all or "Personne.", inline=False)
@@ -488,8 +574,8 @@ async def leaderboard(interaction: discord.Interaction):
     # Monthly
     ordered_m = sorted(scores["monthly"].items(), key=lambda x: x[1]["points"], reverse=True)
     txt_m = ""
-    for i, (uid, data) in enumerate(ordered_m, 1):
-        user = await bot.fetch_user(int(uid))
+    for i, (uid_str, data) in enumerate(ordered_m, 1):
+        user = await bot.fetch_user(int(uid_str))
         r = get_rank(data["points"])
         txt_m += f"**{i}. {user.name}** — {data['points']:.1f} pts | {r}\n"
     emb.add_field(name="📅 CE MOIS-CI", value=txt_m or "Personne.", inline=False)
@@ -503,16 +589,16 @@ async def leaderboard(interaction: discord.Interaction):
 
 @bot.tree.command(name="myrank", description="Voir ton rang")
 async def myrank(interaction: discord.Interaction):
-    uid = str(interaction.user.id)
+    uid_str = str(interaction.user.id)
 
-    if uid not in scores["all_time"]:
+    if uid_str not in scores["all_time"]:
         await interaction.response.send_message(
             "Tu n'as pas encore de score.",
             ephemeral=True,
         )
         return
 
-    data = scores["all_time"][uid]
+    data = scores["all_time"][uid_str]
     pts = data["points"]
     rank = get_rank(pts)
     nxt_thr, nxt_rank, diff = get_next_rank_info(pts)
