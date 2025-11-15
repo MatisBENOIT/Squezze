@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # -------------------- CONFIG --------------------
-GUILD_ID = 1309118091766009856
+GUILD_ID = 1069968737580613752
 SCORES_FILE = "scores.json"
 
 intents = discord.Intents.default()
