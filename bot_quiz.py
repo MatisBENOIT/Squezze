@@ -426,15 +426,13 @@ async def leaderboard(interaction):
 async def on_ready():
     print("Bot connecté en tant que :", bot.user)
 
-    guild_id = int(os.getenv("GUILD_ID"))
-    guild = discord.Object(id=guild_id)
-
     try:
-        cmds = await bot.tree.sync(guild=guild)
-        print(">>> SYNC OK :", [c.name for c in cmds])
+        cmds = await bot.tree.sync()
+        print(">>> SYNC GLOBAL OK :", [c.name for c in cmds])
     except Exception as e:
         print(">>> ERREUR SYNC :", e)
 
 # -------------------- RUN --------------------
 bot.run(os.getenv("BOT_TOKEN"))
+
 
