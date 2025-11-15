@@ -424,10 +424,17 @@ async def leaderboard(interaction):
 # -------------------- ON READY --------------------
 @bot.event
 async def on_ready():
-    guild = discord.Object(id=GUILD_ID)
-    cmds = await bot.tree.sync(guild=guild)
-    print("Commandes synchronisées :", [c.name for c in cmds])
-    print(f"Bot connecté en tant que {bot.user}")
+    print("Bot connecté en tant que :", bot.user)
+
+    guild_id = int(os.getenv("GUILD_ID"))
+    guild = discord.Object(id=guild_id)
+
+    try:
+        cmds = await bot.tree.sync(guild=guild)
+        print(">>> SYNC OK :", [c.name for c in cmds])
+    except Exception as e:
+        print(">>> ERREUR SYNC :", e)
 
 # -------------------- RUN --------------------
 bot.run(os.getenv("BOT_TOKEN"))
+
